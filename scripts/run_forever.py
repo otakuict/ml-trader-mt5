@@ -114,6 +114,8 @@ def compute_signal() -> Optional[dict]:
         return None
 
     meta = json.loads(META_PATH.read_text())
+    model_name = meta.get("model_path", MODEL_PATH.name)
+    print(f"Using model: {model_name}")
     feature_cols = meta["feature_cols"]
     model = joblib.load(MODEL_PATH)
 

@@ -8,5 +8,7 @@
     "volatility_10"
   ],
   "rows": 6386,
-  "test_score": -0.007538827435337403
+  "test_score": -0.007452837245661925,
+  "model_path": "model_20260107_185303.joblib",
+  "trained_at": "20260107_185303"
 }

@@ -1,4 +1,5 @@
 import json
+import logging
 from datetime import datetime
 from pathlib import Path
 
@@ -10,10 +11,14 @@ from sklearn.preprocessing import StandardScaler
 
 from data_loader import load_price_data
 
-DATA_PATH = Path(__file__).resolve().parents[1] / "data" / "gold-data.csv"
-MODEL_DIR = Path(__file__).resolve().parents[1] / "models"
+REFRESH_FROM_MT5 = True
+
+ROOT_DIR = Path(__file__).resolve().parents[1]
+DATA_PATH = ROOT_DIR / "data" / "gold-data.csv"
+MODEL_DIR = ROOT_DIR / "models"
 MODEL_PATH = MODEL_DIR / "model.joblib"
 META_PATH = MODEL_DIR / "model_meta.json"
+LOG_DIR = ROOT_DIR / "logs"
 
 MIN_IMPROVEMENT = 0.01
 
@@ -58,8 +63,27 @@ def train_and_score(df: pd.DataFrame) -> tuple[Pipeline, float, list[str]]:
 
 
 def main() -> int:
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    LOG_DIR.mkdir(parents=True, exist_ok=True)
+    log_path = LOG_DIR / f"auto_retrain_{timestamp}.log"
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)s %(message)s",
+        handlers=[logging.FileHandler(log_path, encoding="utf-8"), logging.StreamHandler()],
+    )
+    logging.info("Auto-retrain start")
+
+    if REFRESH_FROM_MT5:
+        try:
+            from download_mt5_data import download_data
+        except Exception as exc:
+            logging.warning("Failed to load MT5 downloader: %s", exc)
+        else:
+            if not download_data():
+                logging.warning("MT5 download failed; using existing data file.")
+
     if not DATA_PATH.exists():
-        print(f"Missing data file: {DATA_PATH}")
+        logging.error("Missing data file: %s", DATA_PATH)
         return 1
 
     df = load_price_data(DATA_PATH)
@@ -72,17 +96,16 @@ def main() -> int:
         except (ValueError, TypeError, json.JSONDecodeError):
             prev_score = None
 
-    print(f"New model test R^2: {test_score:.4f}")
+    logging.info("New model test R^2: %.4f", test_score)
     if prev_score is not None:
-        print(f"Current model test R^2: {prev_score:.4f}")
+        logging.info("Current model test R^2: %.4f", prev_score)
 
     should_replace = prev_score is None or (test_score - prev_score) >= MIN_IMPROVEMENT
     if not should_replace:
-        print("No improvement. Keeping current model.")
+        logging.info("No improvement. Keeping current model.")
         return 0
 
     MODEL_DIR.mkdir(parents=True, exist_ok=True)
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     archive_model = MODEL_DIR / f"model_{timestamp}.joblib"
     archive_meta = MODEL_DIR / f"model_{timestamp}.json"
 
@@ -93,13 +116,14 @@ def main() -> int:
         "rows": int(len(df)),
         "test_score": float(test_score),
         "created_at": timestamp,
+        "model_path": str(archive_model.name),
     }
     META_PATH.write_text(json.dumps(meta, indent=2))
     archive_meta.write_text(json.dumps(meta, indent=2))
 
-    print("Model updated.")
-    print(f"Saved current model to {MODEL_PATH}")
-    print(f"Archived model to {archive_model}")
+    logging.info("Model updated.")
+    logging.info("Saved current model to %s", MODEL_PATH)
+    logging.info("Archived model to %s", archive_model)
     return 0
 
 
