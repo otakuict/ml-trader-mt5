@@ -1,0 +1,12 @@
+{
+  "feature_cols": [
+    "return",
+    "hl_range",
+    "oc_change",
+    "ma_5",
+    "ma_10",
+    "volatility_10"
+  ],
+  "rows": 6386,
+  "test_score": -0.0075817538191578215
+}

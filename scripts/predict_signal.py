@@ -4,6 +4,8 @@ from pathlib import Path
 import joblib
 import pandas as pd
 
+from data_loader import load_price_data
+
 DATA_PATH = Path(__file__).resolve().parents[1] / "data" / "gold_d1.csv"
 MODEL_PATH = Path(__file__).resolve().parents[1] / "models" / "model.joblib"
 META_PATH = Path(__file__).resolve().parents[1] / "models" / "model_meta.json"
@@ -43,7 +45,7 @@ def main() -> int:
         print("Model not found. Run train_model.py first.")
         return 1
 
-    df = pd.read_csv(DATA_PATH)
+    df = load_price_data(DATA_PATH)
     df = add_atr(make_features(df))
     df = df.dropna().reset_index(drop=True)
 

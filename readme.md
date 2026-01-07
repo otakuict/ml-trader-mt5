@@ -46,6 +46,7 @@ ml-trader/
 3. Confirm you see **GOLD**
 4. Open a **GOLD** chart → set timeframe to **D1**
 5. Scroll back to load more history (important)
+6. Optional: If you already have a CSV (example: data/GOLD_Daily_200106040000_202601070000.csv), place it in data/ and skip manual scrolling
 
 ---
 

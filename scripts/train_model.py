@@ -7,6 +7,8 @@ from sklearn.linear_model import Ridge
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 
+from data_loader import load_price_data
+
 DATA_PATH = Path(__file__).resolve().parents[1] / "data" / "gold_d1.csv"
 MODEL_PATH = Path(__file__).resolve().parents[1] / "models" / "model.joblib"
 META_PATH = Path(__file__).resolve().parents[1] / "models" / "model_meta.json"
@@ -28,7 +30,7 @@ def main() -> int:
         print(f"Missing data file: {DATA_PATH}")
         return 1
 
-    df = pd.read_csv(DATA_PATH)
+    df = load_price_data(DATA_PATH)
     df = make_features(df)
     df["target"] = df["close"].shift(-1) - df["close"]
     df = df.dropna().reset_index(drop=True)

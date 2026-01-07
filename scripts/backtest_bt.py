@@ -1,6 +1,8 @@
 import backtrader as bt
 from pathlib import Path
 
+from data_loader import load_price_data
+
 DATA_PATH = Path(__file__).resolve().parents[1] / "data" / "gold_d1.csv"
 
 
@@ -24,20 +26,17 @@ def main() -> int:
         print(f"Missing data file: {DATA_PATH}")
         return 1
 
+    df = load_price_data(DATA_PATH)
+    if "time" not in df.columns:
+        print("Missing time/date column in CSV.")
+        return 1
+
+    df = df.dropna(subset=["time", "open", "high", "low", "close"]).copy()
+    df = df.sort_values("time")
+    df = df.set_index("time")
+
     cerebro = bt.Cerebro()
-    data = bt.feeds.GenericCSVData(
-        dataname=str(DATA_PATH),
-        datetime=0,
-        open=1,
-        high=2,
-        low=3,
-        close=4,
-        volume=5,
-        openinterest=-1,
-        dtformat="%Y-%m-%d %H:%M:%S",
-        timeframe=bt.TimeFrame.Days,
-        compression=1,
-    )
+    data = bt.feeds.PandasData(dataname=df)
     cerebro.adddata(data)
     cerebro.addstrategy(SmaCross)
     cerebro.broker.setcash(10000.0)
