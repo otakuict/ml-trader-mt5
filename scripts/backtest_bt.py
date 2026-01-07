@@ -3,7 +3,7 @@ from pathlib import Path
 
 from data_loader import load_price_data
 
-DATA_PATH = Path(__file__).resolve().parents[1] / "data" / "gold_d1.csv"
+DATA_PATH = Path(__file__).resolve().parents[1] / "data" / "gold-data.csv"
 
 
 class SmaCross(bt.Strategy):

@@ -21,7 +21,7 @@ ALLOW_REAL = False
 CLOSE_ON_OPPOSITE = True
 CLOSE_ON_HOLD = True
 
-DATA_PATH = Path(__file__).resolve().parents[1] / "data" / "gold_d1.csv"
+DATA_PATH = Path(__file__).resolve().parents[1] / "data" / "gold-data.csv"
 MODEL_PATH = Path(__file__).resolve().parents[1] / "models" / "model.joblib"
 META_PATH = Path(__file__).resolve().parents[1] / "models" / "model_meta.json"
 
@@ -114,6 +114,8 @@ def compute_signal() -> Optional[dict]:
         return None
 
     meta = json.loads(META_PATH.read_text())
+    model_name = meta.get("model_path", MODEL_PATH.name)
+    print(f"Using model: {model_name}")
     feature_cols = meta["feature_cols"]
     model = joblib.load(MODEL_PATH)
 

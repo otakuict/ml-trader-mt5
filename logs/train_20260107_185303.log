@@ -1,0 +1,5 @@
+2026-01-07 18:53:03,480 INFO Training start
+2026-01-07 18:53:03,550 INFO Saved model to D:\work\bot-trade\ml-trader-mt5\models\model_20260107_185303.joblib
+2026-01-07 18:53:03,550 INFO Saved latest model to D:\work\bot-trade\ml-trader-mt5\models\model.joblib
+2026-01-07 18:53:03,550 INFO Rows: 6386
+2026-01-07 18:53:03,550 INFO Test R^2: -0.0075
