@@ -21,7 +21,7 @@ ALLOW_REAL = False
 CLOSE_ON_OPPOSITE = True
 CLOSE_ON_HOLD = True
 
-DATA_PATH = Path(__file__).resolve().parents[1] / "data" / "gold_d1.csv"
+DATA_PATH = Path(__file__).resolve().parents[1] / "data" / "gold-data.csv"
 MODEL_PATH = Path(__file__).resolve().parents[1] / "models" / "model.joblib"
 META_PATH = Path(__file__).resolve().parents[1] / "models" / "model_meta.json"
 

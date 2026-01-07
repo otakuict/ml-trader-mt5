@@ -5,7 +5,7 @@ from pathlib import Path
 SYMBOL = "GOLD"
 TIMEFRAME = mt5.TIMEFRAME_D1
 BARS = 2000
-OUT_PATH = Path(__file__).resolve().parents[1] / "data" / "gold_d1.csv"
+OUT_PATH = Path(__file__).resolve().parents[1] / "data" / "gold-data.csv"
 
 
 def main() -> int:
