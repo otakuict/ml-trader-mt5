@@ -1,14 +1,33 @@
 {
   "feature_cols": [
-    "return",
+    "return_1",
+    "return_3",
+    "return_6",
     "hl_range",
     "oc_change",
     "ma_5",
     "ma_10",
-    "volatility_10"
+    "ma_20",
+    "ema_5",
+    "ema_10",
+    "volatility_10",
+    "volatility_20",
+    "rsi_14",
+    "hour_sin",
+    "hour_cos",
+    "dow_sin",
+    "dow_cos",
+    "vol_ma_20",
+    "vol_change"
   ],
-  "rows": 6386,
-  "test_score": -0.007452837245661925,
-  "model_path": "model_20260107_185303.joblib",
-  "trained_at": "20260107_185303"
+  "rows": 78224,
+  "test_accuracy": 0.4851390220517737,
+  "test_precision": 0.5311107149224461,
+  "model_path": "model_20260108_170358.joblib",
+  "trained_at": "20260108_170358",
+  "model_algo": "SGDClassifier",
+  "model_type": "classification",
+  "target": "next_6_close_up",
+  "train_mode": "incremental",
+  "last_train_time": "2026-01-08T10:00:00"
 }

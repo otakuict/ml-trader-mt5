@@ -2,23 +2,46 @@ import json
 from pathlib import Path
 
 import joblib
+import numpy as np
 import pandas as pd
 
 from data_loader import load_price_data
 
-DATA_PATH = Path(__file__).resolve().parents[1] / "data" / "gold-data.csv"
+DATA_PATH = Path(__file__).resolve().parents[1] / "data" / "gold-data-h1.csv"
 MODEL_PATH = Path(__file__).resolve().parents[1] / "models" / "model.joblib"
 META_PATH = Path(__file__).resolve().parents[1] / "models" / "model_meta.json"
 
 
 def make_features(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
-    df["return"] = df["close"].pct_change()
+    if "time" in df.columns:
+        dt = pd.to_datetime(df["time"], errors="coerce")
+        hour = dt.dt.hour
+        dow = dt.dt.dayofweek
+        df["hour_sin"] = np.sin(2 * np.pi * hour / 24)
+        df["hour_cos"] = np.cos(2 * np.pi * hour / 24)
+        df["dow_sin"] = np.sin(2 * np.pi * dow / 7)
+        df["dow_cos"] = np.cos(2 * np.pi * dow / 7)
+    df["return_1"] = df["close"].pct_change()
+    df["return_3"] = df["close"].pct_change(3)
+    df["return_6"] = df["close"].pct_change(6)
     df["hl_range"] = (df["high"] - df["low"]) / df["close"]
     df["oc_change"] = (df["close"] - df["open"]) / df["open"]
     df["ma_5"] = df["close"].rolling(5).mean()
     df["ma_10"] = df["close"].rolling(10).mean()
-    df["volatility_10"] = df["return"].rolling(10).std()
+    df["ma_20"] = df["close"].rolling(20).mean()
+    df["ema_5"] = df["close"].ewm(span=5, adjust=False).mean()
+    df["ema_10"] = df["close"].ewm(span=10, adjust=False).mean()
+    df["volatility_10"] = df["return_1"].rolling(10).std()
+    df["volatility_20"] = df["return_1"].rolling(20).std()
+    delta = df["close"].diff()
+    gain = delta.clip(lower=0).rolling(14).mean()
+    loss = (-delta.clip(upper=0)).rolling(14).mean()
+    rs = gain / loss.replace(0, pd.NA)
+    df["rsi_14"] = 100 - (100 / (1 + rs))
+    if "volume" in df.columns:
+        df["vol_ma_20"] = df["volume"].rolling(20).mean()
+        df["vol_change"] = df["volume"].pct_change().replace([pd.NA, pd.NaT], 0.0)
     return df
 
 
@@ -50,26 +73,63 @@ def main() -> int:
     df = df.dropna().reset_index(drop=True)
 
     meta = json.loads(META_PATH.read_text())
+    model_type = meta.get("model_type", "regression")
     feature_cols = meta["feature_cols"]
-    model = joblib.load(MODEL_PATH)
+    bundle = joblib.load(MODEL_PATH)
+    if isinstance(bundle, dict) and "model" in bundle:
+        model = bundle["model"]
+        scaler = bundle.get("scaler")
+    else:
+        model = bundle
+        scaler = None
 
     last = df.iloc[-1]
     X = last[feature_cols].to_frame().T
-    pred_delta = float(model.predict(X)[0])
+    if scaler is not None:
+        X = scaler.transform(X.to_numpy())
+    if model_type == "classification":
+        proba = float(model.predict_proba(X)[0][1])
+        pred_delta = proba
+    else:
+        pred_delta = float(model.predict(X)[0])
 
     atr = float(last.get("atr", 0.0))
-    close = float(last["close"])
-    threshold = max(atr * 0.25, close * 0.002)
-
-    if pred_delta > threshold:
-        signal = "BUY"
-    elif pred_delta < -threshold:
-        signal = "SELL"
+    if model_type == "classification":
+        if pred_delta >= 0.85:
+            signal = "BUY"
+        elif pred_delta <= 0.15:
+            signal = "SELL"
+        else:
+            signal = "HOLD"
+        ma_20 = float(last.get("ma_20", float("nan")))
+        close = float(last.get("close", float("nan")))
+        trend_blocked = False
+        if np.isfinite(ma_20) and np.isfinite(close):
+            if signal == "BUY" and close <= ma_20:
+                signal = "HOLD"
+                trend_blocked = True
+            elif signal == "SELL" and close >= ma_20:
+                signal = "HOLD"
+                trend_blocked = True
+        else:
+            if signal in {"BUY", "SELL"}:
+                signal = "HOLD"
+                trend_blocked = True
+        print(f"Predicted up probability: {pred_delta:.4f}")
+        print("Thresholds: BUY>=0.85 SELL<=0.15")
+        if trend_blocked:
+            print("Trend filter blocked trade (close vs MA20).")
     else:
-        signal = "HOLD"
-
-    print(f"Predicted next-day delta: {pred_delta:.4f}")
-    print(f"ATR: {atr:.4f} | Threshold: {threshold:.4f}")
+        close = float(last["close"])
+        threshold = max(atr * 0.25, close * 0.002)
+        if pred_delta > threshold:
+            signal = "BUY"
+        elif pred_delta < -threshold:
+            signal = "SELL"
+        else:
+            signal = "HOLD"
+        print(f"Predicted next-bar delta: {pred_delta:.4f}")
+        print(f"ATR: {atr:.4f} | Threshold: {threshold:.4f}")
     print(f"Signal: {signal}")
     return 0
 

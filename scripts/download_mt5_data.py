@@ -5,9 +5,9 @@ import MetaTrader5 as mt5
 import pandas as pd
 
 SYMBOL = "GOLD"
-TIMEFRAME = mt5.TIMEFRAME_D1
-START_DATE = datetime(2001, 1, 1)
-OUT_PATH = Path(__file__).resolve().parents[1] / "data" / "gold-data.csv"
+TIMEFRAME = mt5.TIMEFRAME_H1
+START_DATE = datetime(2000, 1, 1)
+OUT_PATH = Path(__file__).resolve().parents[1] / "data" / "gold-data-h1.csv"
 
 
 def download_data() -> bool:
