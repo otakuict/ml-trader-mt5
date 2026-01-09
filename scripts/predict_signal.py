@@ -5,21 +5,27 @@ import joblib
 import numpy as np
 import pandas as pd
 
-from data_loader import load_price_data
+from data_loader import load_price_data, to_daily
 
-DATA_PATH = Path(__file__).resolve().parents[1] / "data" / "gold-data-h1.csv"
+DATA_PATH = Path(__file__).resolve().parents[1] / "data" / "gold-data-h4.csv"
 MODEL_PATH = Path(__file__).resolve().parents[1] / "models" / "model.joblib"
 META_PATH = Path(__file__).resolve().parents[1] / "models" / "model_meta.json"
+
+DAILY_TRADE_ONLY = True
+DAILY_TRADE_DIR_THRESHOLD = 0.50
+DAILY_TRADE_IGNORE_TREND = True
+DAILY_USE_MODEL = False
+DAILY_CONF_BUY = 0.65
+DAILY_CONF_SELL = 0.35
+TREND_MA_PERIOD = 50
+TREND_MA_COL = f"ma_{TREND_MA_PERIOD}"
 
 
 def make_features(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
     if "time" in df.columns:
         dt = pd.to_datetime(df["time"], errors="coerce")
-        hour = dt.dt.hour
         dow = dt.dt.dayofweek
-        df["hour_sin"] = np.sin(2 * np.pi * hour / 24)
-        df["hour_cos"] = np.cos(2 * np.pi * hour / 24)
         df["dow_sin"] = np.sin(2 * np.pi * dow / 7)
         df["dow_cos"] = np.cos(2 * np.pi * dow / 7)
     df["return_1"] = df["close"].pct_change()
@@ -30,6 +36,7 @@ def make_features(df: pd.DataFrame) -> pd.DataFrame:
     df["ma_5"] = df["close"].rolling(5).mean()
     df["ma_10"] = df["close"].rolling(10).mean()
     df["ma_20"] = df["close"].rolling(20).mean()
+    df[TREND_MA_COL] = df["close"].rolling(TREND_MA_PERIOD).mean()
     df["ema_5"] = df["close"].ewm(span=5, adjust=False).mean()
     df["ema_10"] = df["close"].ewm(span=10, adjust=False).mean()
     df["volatility_10"] = df["return_1"].rolling(10).std()
@@ -69,6 +76,7 @@ def main() -> int:
         return 1
 
     df = load_price_data(DATA_PATH)
+    df = to_daily(df)
     df = add_atr(make_features(df))
     df = df.dropna().reset_index(drop=True)
 
@@ -83,6 +91,10 @@ def main() -> int:
         model = bundle
         scaler = None
 
+    for col in feature_cols:
+        if col not in df.columns:
+            df[col] = 0.0
+
     last = df.iloc[-1]
     X = last[feature_cols].to_frame().T
     if scaler is not None:
@@ -95,30 +107,57 @@ def main() -> int:
 
     atr = float(last.get("atr", 0.0))
     if model_type == "classification":
-        if pred_delta >= 0.85:
-            signal = "BUY"
-        elif pred_delta <= 0.15:
-            signal = "SELL"
-        else:
-            signal = "HOLD"
-        ma_20 = float(last.get("ma_20", float("nan")))
+        ma_trend = float(last.get(TREND_MA_COL, float("nan")))
         close = float(last.get("close", float("nan")))
         trend_blocked = False
-        if np.isfinite(ma_20) and np.isfinite(close):
-            if signal == "BUY" and close <= ma_20:
-                signal = "HOLD"
-                trend_blocked = True
-            elif signal == "SELL" and close >= ma_20:
-                signal = "HOLD"
-                trend_blocked = True
+        if DAILY_TRADE_ONLY:
+            if not DAILY_USE_MODEL:
+                if not np.isfinite(ma_trend) or not np.isfinite(close):
+                    signal = "HOLD"
+                    trend_blocked = True
+                else:
+                    signal = "BUY" if close >= ma_trend else "SELL"
+                print(f"Daily trade mode: trend (close vs MA{TREND_MA_PERIOD})")
+            else:
+                if pred_delta >= DAILY_CONF_BUY:
+                    signal = "BUY"
+                elif pred_delta <= DAILY_CONF_SELL:
+                    signal = "SELL"
+                else:
+                    if DAILY_TRADE_IGNORE_TREND:
+                        signal = "BUY" if pred_delta >= DAILY_TRADE_DIR_THRESHOLD else "SELL"
+                    else:
+                        if not np.isfinite(ma_trend) or not np.isfinite(close):
+                            signal = "HOLD"
+                            trend_blocked = True
+                        else:
+                            signal = "BUY" if close >= ma_trend else "SELL"
+                print(f"Predicted up probability: {pred_delta:.4f}")
+                print(
+                    f"Daily conf: BUY>= {DAILY_CONF_BUY:.2f} SELL<= {DAILY_CONF_SELL:.2f}"
+                )
         else:
-            if signal in {"BUY", "SELL"}:
+            if pred_delta >= 0.85:
+                signal = "BUY"
+            elif pred_delta <= 0.15:
+                signal = "SELL"
+            else:
                 signal = "HOLD"
-                trend_blocked = True
-        print(f"Predicted up probability: {pred_delta:.4f}")
-        print("Thresholds: BUY>=0.85 SELL<=0.15")
+            if np.isfinite(ma_trend) and np.isfinite(close):
+                if signal == "BUY" and close <= ma_trend:
+                    signal = "HOLD"
+                    trend_blocked = True
+                elif signal == "SELL" and close >= ma_trend:
+                    signal = "HOLD"
+                    trend_blocked = True
+            else:
+                if signal in {"BUY", "SELL"}:
+                    signal = "HOLD"
+                    trend_blocked = True
+            print(f"Predicted up probability: {pred_delta:.4f}")
+            print("Thresholds: BUY>=0.85 SELL<=0.15")
         if trend_blocked:
-            print("Trend filter blocked trade (close vs MA20).")
+            print(f"Trend filter blocked trade (close vs MA{TREND_MA_PERIOD}).")
     else:
         close = float(last["close"])
         threshold = max(atr * 0.25, close * 0.002)

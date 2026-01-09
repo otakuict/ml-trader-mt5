@@ -7,7 +7,7 @@ import backtrader as bt
 from data_loader import load_price_data
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
-DATA_PATH = ROOT_DIR / "data" / "gold-data-h1.csv"
+DATA_PATH = ROOT_DIR / "data" / "gold-data-h4.csv"
 LOG_DIR = ROOT_DIR / "logs"
 
 

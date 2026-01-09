@@ -1,7 +1,7 @@
 # ml-trader - XM MT5 Demo ML Bot (GOLD)
 
 A simple **demo** trading project for **XM MetaTrader 5 (MT5)** using a **machine-learning signal**.
-Default timeframe: **H1**.
+Default timeframe: **H4** (model trains on daily bars derived from H4).
 
 > Use **demo** for learning/testing. Real-money trading is risky and often age-restricted.
 
@@ -44,7 +44,7 @@ ml-trader/
 1. Open MT5 and login to an **XM demo** account
 2. Market Watch (Ctrl+M) + right click + Show All
 3. Confirm you see **GOLD**
-4. Open a **GOLD** chart and set timeframe to **H1**
+4. Open a **GOLD** chart and set timeframe to **H4**
 5. Scroll back to load more history (important)
 
 If you already have a CSV, place it in `data/` and use it directly (see Data files).
@@ -65,16 +65,16 @@ If you already have a CSV, place it in `data/` and use it directly (see Data fil
 ## Data files
 
 Default data file (used by all scripts):
-- `data/gold-data-h1.csv`
+- `data/gold-data-h4.csv`
 
-`download_mt5_data.py` uses a date range (2015 -> now) and **overwrites** the file.
+`download_mt5_data.py` uses a date range (2000 -> now) and **overwrites** the file.
 If you want to keep a long historical CSV, do not overwrite it, or change the output path.
 
 ---
 
 ## Run order (first time)
 
-1) Download GOLD H1 candles to CSV:
+1) Download GOLD H4 candles to CSV:
 - python scripts/download_mt5_data.py
 
 2) Backtest starter strategy (SMA cross):
@@ -118,11 +118,10 @@ Auto-retrain (only replace if performance improves):
 
 ## Run-forever behavior
 
-`run_forever.py` checks every 5 minutes for a new H1 candle and then:
-- Computes the ML signal (BUY / SELL / HOLD)
-- Trades only on BUY/SELL
-- Closes on HOLD if `CLOSE_ON_HOLD = True`
-- Closes opposite positions if `CLOSE_ON_OPPOSITE = True`
+`run_forever.py` checks every 5 minutes and:
+- Builds a daily signal from H4 data
+- Places one trade per day at **23:55 local time** (configurable)
+- Uses ATR-based SL/TP if enabled
 
 Safety switches (top of `scripts/run_forever.py`):
 - `DRY_RUN` - no orders if True
@@ -130,12 +129,20 @@ Safety switches (top of `scripts/run_forever.py`):
 - `LOT_SIZE` - small default size for demo testing
 - `ML_TRADING_ENABLED` - set False to pause ML trading
 - `CLASS_BUY_THRESHOLD` / `CLASS_SELL_THRESHOLD` - confidence thresholds (default 0.85/0.15)
-- `USE_ATR_SLTP`, `SL_ATR_MULT`, `TP_ATR_MULT` - ATR-based stop/take-profit (default SLx=1.5 TPx=3.0)
-- `TREND_FILTER` - only buy above MA20, sell below MA20
+- `USE_ATR_SLTP`, `SL_ATR_MULT`, `TP_ATR_MULT` - ATR-based stop/take-profit (default SLx=1.2 TPx=4.0)
+- `TREND_FILTER` - only buy above MA50, sell below MA50
+- `TREND_MA_PERIOD` - moving average length used by the trend filter (default 50)
+- `DAILY_TRADE_ONLY` - trade once per day at the configured time
+- `DAILY_TRADE_HOUR` / `DAILY_TRADE_MINUTE` - local time for daily entry (default 23:55)
+- `DAILY_TRADE_DIR_THRESHOLD` - probability cutoff for daily direction (>= BUY else SELL)
+- `DAILY_CLOSE_EXISTING` - close existing position before the daily trade
+- `DAILY_CONF_BUY` / `DAILY_CONF_SELL` - confidence band for model-driven direction (default 0.65/0.35)
+- `DAILY_FALLBACK_TREND` - use MA50 trend when probability is between the band
+- `DAILY_USE_MODEL` - set False to use pure MA50 trend for daily direction
 - `FORCE_DAILY_TRADE` - force at least one trade per day
 - `DAILY_TRADE_HOUR` / `DAILY_TRADE_MINUTE` - time for the daily forced trade
 - `DAILY_TRADE_DIR_THRESHOLD` - probability threshold to pick BUY vs SELL
-- `DAILY_TRADE_IGNORE_TREND` - ignore MA20 filter for forced daily trade
+- `DAILY_TRADE_IGNORE_TREND` - ignore MA50 filter for forced daily trade
 
 ---
 
@@ -152,8 +159,9 @@ Use `scripts/test_order.py` to place and close a tiny demo order and print recen
 - Walk-forward evaluation (train window + test window)
 - Confidence thresholds for trades
 - ATR-based stop-loss / take-profit
-- Trend filter using MA20
+- Trend filter using MA50
 - Daily forced trade (same settings as live)
+Default walk-forward windows: 1000 train / 1 test.
 
 `train_model.py` uses incremental learning (updates the previous model if new data exists).
 

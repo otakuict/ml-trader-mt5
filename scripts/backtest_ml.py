@@ -10,10 +10,10 @@ import pandas as pd
 from sklearn.base import clone
 from sklearn.preprocessing import StandardScaler
 
-from data_loader import load_price_data
+from data_loader import load_price_data, to_daily
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
-DATA_PATH = ROOT_DIR / "data" / "gold-data-h1.csv"
+DATA_PATH = ROOT_DIR / "data" / "gold-data-h4.csv"
 MODEL_PATH = ROOT_DIR / "models" / "model.joblib"
 META_PATH = ROOT_DIR / "models" / "model_meta.json"
 LOG_DIR = ROOT_DIR / "logs"
@@ -21,22 +21,29 @@ LOG_DIR = ROOT_DIR / "logs"
 BUY_THRESHOLD = 0.85
 SELL_THRESHOLD = 0.15
 USE_WALK_FORWARD = True
-TRAIN_WINDOW = 5000
-TEST_WINDOW = 500
+TRAIN_WINDOW = 1000
+TEST_WINDOW = 1
 USE_ATR_SLTP = True
-SL_ATR_MULT = 1.5
-TP_ATR_MULT = 3.0
+SL_ATR_MULT = 1.2
+TP_ATR_MULT = 4.0
 CLOSE_ON_TREND_FILTER = True
 CLOSE_ON_HOLD = True
 CLOSE_ON_OPPOSITE = True
 START_CASH = 10000.0
 COMMISSION = 0.0005
 TRADE_SIZE = 1
-FORCE_DAILY_TRADE = True
-DAILY_TRADE_HOUR = 9
-DAILY_TRADE_MINUTE = 0
+FORCE_DAILY_TRADE = False
+DAILY_TRADE_HOUR = 23
+DAILY_TRADE_MINUTE = 55
 DAILY_TRADE_DIR_THRESHOLD = 0.50
 DAILY_TRADE_IGNORE_TREND = True
+DAILY_TRADE_ONLY = True
+DAILY_FALLBACK_TREND = True
+DAILY_CONF_BUY = 0.65
+DAILY_CONF_SELL = 0.35
+DAILY_USE_MODEL = False
+TREND_MA_PERIOD = 50
+TREND_MA_COL = f"ma_{TREND_MA_PERIOD}"
 
 
 def make_features(df: pd.DataFrame) -> pd.DataFrame:
@@ -49,13 +56,9 @@ def make_features(df: pd.DataFrame) -> pd.DataFrame:
         dt = None
     if dt is not None:
         if isinstance(dt, pd.DatetimeIndex):
-            hour = dt.hour
             dow = dt.dayofweek
         else:
-            hour = dt.dt.hour
             dow = dt.dt.dayofweek
-        df["hour_sin"] = np.sin(2 * np.pi * hour / 24)
-        df["hour_cos"] = np.cos(2 * np.pi * hour / 24)
         df["dow_sin"] = np.sin(2 * np.pi * dow / 7)
         df["dow_cos"] = np.cos(2 * np.pi * dow / 7)
     df["return_1"] = df["close"].pct_change()
@@ -66,6 +69,7 @@ def make_features(df: pd.DataFrame) -> pd.DataFrame:
     df["ma_5"] = df["close"].rolling(5).mean()
     df["ma_10"] = df["close"].rolling(10).mean()
     df["ma_20"] = df["close"].rolling(20).mean()
+    df[TREND_MA_COL] = df["close"].rolling(TREND_MA_PERIOD).mean()
     df["ema_5"] = df["close"].ewm(span=5, adjust=False).mean()
     df["ema_10"] = df["close"].ewm(span=10, adjust=False).mean()
     df["volatility_10"] = df["return_1"].rolling(10).std()
@@ -117,15 +121,37 @@ def compute_signals(
         proba = model.predict_proba(X)[:, 1]
         prob.loc[idx] = proba
         close = features.loc[idx, "close"]
-        ma_20 = features.loc[idx, "ma_20"]
-        sig = pd.Series(0, index=idx, dtype=int)
-        buy_mask = proba >= BUY_THRESHOLD
-        sell_mask = proba <= SELL_THRESHOLD
-        if CLOSE_ON_TREND_FILTER:
-            buy_mask &= close > ma_20
-            sell_mask &= close < ma_20
-        sig[buy_mask] = 1
-        sig[sell_mask] = -1
+        ma_trend = features.loc[idx, TREND_MA_COL]
+        if DAILY_TRADE_ONLY:
+            if not DAILY_USE_MODEL:
+                sig = pd.Series(1, index=idx, dtype=int)
+                sig[close < ma_trend] = -1
+            else:
+                sig = pd.Series(-1, index=idx, dtype=int)
+                sig[proba >= DAILY_CONF_BUY] = 1
+                sig[(proba < DAILY_CONF_BUY) & (proba > DAILY_CONF_SELL)] = np.nan
+                sig[proba <= DAILY_CONF_SELL] = -1
+                if DAILY_FALLBACK_TREND:
+                    fallback_buy = close >= ma_trend
+                    sig = sig.where(~sig.isna(), np.where(fallback_buy, 1, -1))
+                else:
+                    sig = sig.where(
+                        ~sig.isna(), np.where(proba >= DAILY_TRADE_DIR_THRESHOLD, 1, -1)
+                    )
+                sig = sig.fillna(0)
+            if not DAILY_TRADE_IGNORE_TREND:
+                sig[(sig == 1) & (close <= ma_trend)] = 0
+                sig[(sig == -1) & (close >= ma_trend)] = 0
+            sig[~np.isfinite(ma_trend)] = 0
+        else:
+            sig = pd.Series(0, index=idx, dtype=int)
+            buy_mask = proba >= BUY_THRESHOLD
+            sell_mask = proba <= SELL_THRESHOLD
+            if CLOSE_ON_TREND_FILTER:
+                buy_mask &= close > ma_trend
+                sell_mask &= close < ma_trend
+            sig[buy_mask] = 1
+            sig[sell_mask] = -1
         signals.loc[sig.index] = sig
     else:
         preds = model.predict(X)
@@ -188,15 +214,38 @@ def compute_signals_walk_forward(
             X_test = scaler.transform(test[feature_cols].to_numpy())
             proba = model.predict_proba(X_test)[:, 1]
             close = test["close"]
-            ma_20 = test["ma_20"]
-            sig = pd.Series(0, index=test.index, dtype=int)
-            buy_mask = proba >= BUY_THRESHOLD
-            sell_mask = proba <= SELL_THRESHOLD
-            if CLOSE_ON_TREND_FILTER:
-                buy_mask &= close > ma_20
-                sell_mask &= close < ma_20
-            sig[buy_mask] = 1
-            sig[sell_mask] = -1
+            ma_trend = test[TREND_MA_COL]
+            if DAILY_TRADE_ONLY:
+                if not DAILY_USE_MODEL:
+                    sig = pd.Series(1, index=test.index, dtype=int)
+                    sig[close < ma_trend] = -1
+                else:
+                    sig = pd.Series(-1, index=test.index, dtype=int)
+                    sig[proba >= DAILY_CONF_BUY] = 1
+                    sig[(proba < DAILY_CONF_BUY) & (proba > DAILY_CONF_SELL)] = np.nan
+                    sig[proba <= DAILY_CONF_SELL] = -1
+                    if DAILY_FALLBACK_TREND:
+                        fallback_buy = close >= ma_trend
+                        sig = sig.where(~sig.isna(), np.where(fallback_buy, 1, -1))
+                    else:
+                        sig = sig.where(
+                            ~sig.isna(),
+                            np.where(proba >= DAILY_TRADE_DIR_THRESHOLD, 1, -1),
+                        )
+                    sig = sig.fillna(0)
+                if not DAILY_TRADE_IGNORE_TREND:
+                    sig[(sig == 1) & (close <= ma_trend)] = 0
+                    sig[(sig == -1) & (close >= ma_trend)] = 0
+                sig[~np.isfinite(ma_trend)] = 0
+            else:
+                sig = pd.Series(0, index=test.index, dtype=int)
+                buy_mask = proba >= BUY_THRESHOLD
+                sell_mask = proba <= SELL_THRESHOLD
+                if CLOSE_ON_TREND_FILTER:
+                    buy_mask &= close > ma_trend
+                    sell_mask &= close < ma_trend
+                sig[buy_mask] = 1
+                sig[sell_mask] = -1
             signals.loc[sig.index] = sig
             prob.loc[sig.index] = proba
         else:
@@ -215,8 +264,13 @@ def compute_signals_walk_forward(
 
 
 class SignalData(bt.feeds.PandasData):
-    lines = ("signal", "atr", "prob", "ma_20")
-    params = (("signal", "signal"), ("atr", "atr"), ("prob", "prob"), ("ma_20", "ma_20"))
+    lines = ("signal", "atr", "prob", "ma_trend")
+    params = (
+        ("signal", "signal"),
+        ("atr", "atr"),
+        ("prob", "prob"),
+        ("ma_trend", "ma_trend"),
+    )
 
 
 class SignalStrategy(bt.Strategy):
@@ -233,7 +287,7 @@ class SignalStrategy(bt.Strategy):
         self.signal = self.datas[0].signal
         self.atr = self.datas[0].atr
         self.prob = self.datas[0].prob
-        self.ma_20 = self.datas[0].ma_20
+        self.ma_trend = self.datas[0].ma_trend
         self.stop_price = None
         self.target_price = None
         self.last_trade_date = None
@@ -330,11 +384,11 @@ class SignalStrategy(bt.Strategy):
         forced_signal = "BUY" if prob >= DAILY_TRADE_DIR_THRESHOLD else "SELL"
         if not DAILY_TRADE_IGNORE_TREND:
             close = float(self.data.close[0])
-            ma_20 = float(self.ma_20[0])
-            if not np.isfinite(ma_20):
+            ma_trend = float(self.ma_trend[0])
+            if not np.isfinite(ma_trend):
                 return
-            if (forced_signal == "BUY" and close <= ma_20) or (
-                forced_signal == "SELL" and close >= ma_20
+            if (forced_signal == "BUY" and close <= ma_trend) or (
+                forced_signal == "SELL" and close >= ma_trend
             ):
                 return
 
@@ -373,9 +427,7 @@ def main() -> int:
         return 1
 
     df = load_price_data(DATA_PATH)
-    if "time" not in df.columns:
-        logging.error("Missing time/date column in CSV.")
-        return 1
+    df = to_daily(df)
 
     meta = json.loads(META_PATH.read_text())
     feature_cols = meta["feature_cols"]
@@ -401,10 +453,10 @@ def main() -> int:
         signals, prob, features = compute_signals(df, model, scaler, feature_cols, model_type)
     df["signal"] = signals
     df["prob"] = prob
-    if "ma_20" in features.columns:
-        df["ma_20"] = features["ma_20"]
+    if TREND_MA_COL in features.columns:
+        df["ma_trend"] = features[TREND_MA_COL]
     else:
-        df["ma_20"] = np.nan
+        df["ma_trend"] = np.nan
 
     signal_counts = df["signal"].value_counts()
     buy_signals = int(signal_counts.get(1, 0))
@@ -416,6 +468,14 @@ def main() -> int:
     logging.info("Walk-forward: %s", USE_WALK_FORWARD)
     if model_type == "classification":
         logging.info("Thresholds: BUY>=%.2f SELL<=%.2f", BUY_THRESHOLD, SELL_THRESHOLD)
+        logging.info("Daily trade only: %s | Dir>=%.2f", DAILY_TRADE_ONLY, DAILY_TRADE_DIR_THRESHOLD)
+        logging.info(
+            "Daily conf: BUY>=%.2f SELL<=%.2f | Fallback trend: %s",
+            DAILY_CONF_BUY,
+            DAILY_CONF_SELL,
+            DAILY_FALLBACK_TREND,
+        )
+        logging.info("Daily use model: %s", DAILY_USE_MODEL)
     logging.info("Trend filter: %s", CLOSE_ON_TREND_FILTER)
     logging.info("ATR SL/TP: %s | SLx=%.2f TPx=%.2f", USE_ATR_SLTP, SL_ATR_MULT, TP_ATR_MULT)
 
@@ -425,6 +485,7 @@ def main() -> int:
     cerebro.addstrategy(SignalStrategy)
     cerebro.broker.setcash(START_CASH)
     cerebro.broker.setcommission(commission=COMMISSION)
+    cerebro.broker.set_coc(True)
 
     start_value = cerebro.broker.getvalue()
     cerebro.run()

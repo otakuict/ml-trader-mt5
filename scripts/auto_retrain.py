@@ -11,13 +11,13 @@ from sklearn.metrics import accuracy_score, precision_score
 from sklearn.preprocessing import StandardScaler
 from sklearn.utils.class_weight import compute_class_weight
 
-from data_loader import load_price_data
+from data_loader import load_price_data, to_daily
 
 REFRESH_FROM_MT5 = True
-HORIZON_BARS = 6
+HORIZON_DAYS = 1
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
-DATA_PATH = ROOT_DIR / "data" / "gold-data-h1.csv"
+DATA_PATH = ROOT_DIR / "data" / "gold-data-h4.csv"
 MODEL_DIR = ROOT_DIR / "models"
 MODEL_PATH = MODEL_DIR / "model.joblib"
 META_PATH = MODEL_DIR / "model_meta.json"
@@ -30,10 +30,7 @@ def make_features(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
     if "time" in df.columns:
         dt = pd.to_datetime(df["time"], errors="coerce")
-        hour = dt.dt.hour
         dow = dt.dt.dayofweek
-        df["hour_sin"] = np.sin(2 * np.pi * hour / 24)
-        df["hour_cos"] = np.cos(2 * np.pi * hour / 24)
         df["dow_sin"] = np.sin(2 * np.pi * dow / 7)
         df["dow_cos"] = np.cos(2 * np.pi * dow / 7)
     df["return_1"] = df["close"].pct_change()
@@ -61,7 +58,7 @@ def make_features(df: pd.DataFrame) -> pd.DataFrame:
 
 def train_and_score(df: pd.DataFrame) -> tuple[dict, float, float, list[str]]:
     df = make_features(df)
-    df["target"] = (df["close"].shift(-HORIZON_BARS) - df["close"]) > 0
+    df["target"] = (df["close"].shift(-HORIZON_DAYS) - df["close"]) > 0
     df = df.dropna().reset_index(drop=True)
 
     feature_cols = [
@@ -80,7 +77,7 @@ def train_and_score(df: pd.DataFrame) -> tuple[dict, float, float, list[str]]:
         "rsi_14",
     ]
     if "time" in df.columns:
-        feature_cols.extend(["hour_sin", "hour_cos", "dow_sin", "dow_cos"])
+        feature_cols.extend(["dow_sin", "dow_cos"])
     if "volume" in df.columns:
         feature_cols.extend(["vol_ma_20", "vol_change"])
     split_idx = int(len(df) * 0.8)
@@ -141,9 +138,7 @@ def main() -> int:
         return 1
 
     df = load_price_data(DATA_PATH)
-    if "time" not in df.columns:
-        logging.error("Missing time/date column in CSV.")
-        return 1
+    df = to_daily(df)
     df["time"] = pd.to_datetime(df["time"], errors="coerce")
     df = df.sort_values("time")
     model_bundle, test_acc, test_prec, feature_cols = train_and_score(df)
@@ -183,7 +178,7 @@ def main() -> int:
         "model_path": str(archive_model.name),
         "model_algo": "SGDClassifier",
         "model_type": "classification",
-        "target": f"next_{HORIZON_BARS}_close_up",
+        "target": f"next_{HORIZON_DAYS}_close_up",
         "train_mode": "full",
         "last_train_time": latest_time.isoformat() if latest_time is not None else None,
     }

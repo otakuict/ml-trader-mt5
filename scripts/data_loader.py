@@ -40,3 +40,26 @@ def load_price_data(path: Path) -> pd.DataFrame:
         raise ValueError(f"Missing columns: {', '.join(missing)}")
 
     return df
+
+
+def to_daily(df: pd.DataFrame) -> pd.DataFrame:
+    if "time" not in df.columns:
+        raise ValueError("Missing time column for daily resample.")
+
+    df = df.copy()
+    df["time"] = pd.to_datetime(df["time"], errors="coerce")
+    df = df.dropna(subset=["time", "open", "high", "low", "close"])
+    df = df.sort_values("time").set_index("time")
+
+    agg = {
+        "open": "first",
+        "high": "max",
+        "low": "min",
+        "close": "last",
+    }
+    if "volume" in df.columns:
+        agg["volume"] = "sum"
+
+    daily = df.resample("1D").agg(agg)
+    daily = daily.dropna(subset=["open", "high", "low", "close"]).reset_index()
+    return daily

@@ -61,7 +61,7 @@ ml-trader/
 
 ## Day-trade settings (M30)
 
-The scripts in `readme.md` are set to H1 by default.
+The scripts in `readme.md` are set to H4 by default.
 If you want M30 day-trading, update:
 - `TIMEFRAME = mt5.TIMEFRAME_M30`
 - `data/gold-data-m30.csv`
@@ -127,12 +127,18 @@ Safety switches (top of `scripts/run_forever.py`):
 - `LOT_SIZE` - small default size for demo testing
 - `ML_TRADING_ENABLED` - set False to pause ML trading
 - `CLASS_BUY_THRESHOLD` / `CLASS_SELL_THRESHOLD` - confidence thresholds (default 0.85/0.15)
-- `USE_ATR_SLTP`, `SL_ATR_MULT`, `TP_ATR_MULT` - ATR-based stop/take-profit (default SLx=1.5 TPx=3.0)
-- `TREND_FILTER` - only buy above MA20, sell below MA20
+- `USE_ATR_SLTP`, `SL_ATR_MULT`, `TP_ATR_MULT` - ATR-based stop/take-profit (default SLx=1.2 TPx=4.0)
+- `TREND_FILTER` - only buy above MA50, sell below MA50
+- `TREND_MA_PERIOD` - moving average length used by the trend filter (default 50)
 - `FORCE_DAILY_TRADE` - force at least one trade per day
-- `DAILY_TRADE_HOUR` / `DAILY_TRADE_MINUTE` - time for the daily forced trade
-- `DAILY_TRADE_DIR_THRESHOLD` - probability threshold to pick BUY vs SELL
-- `DAILY_TRADE_IGNORE_TREND` - ignore MA20 filter for forced daily trade
+- `DAILY_TRADE_ONLY` - trade once per day at the configured time
+- `DAILY_TRADE_HOUR` / `DAILY_TRADE_MINUTE` - time for the daily trade (default 23:55)
+- `DAILY_TRADE_DIR_THRESHOLD` - probability cutoff for daily direction (>= BUY else SELL)
+- `DAILY_TRADE_IGNORE_TREND` - ignore MA50 filter for daily trade
+- `DAILY_CLOSE_EXISTING` - close existing position before the daily trade
+- `DAILY_CONF_BUY` / `DAILY_CONF_SELL` - confidence band for model-driven direction (default 0.65/0.35)
+- `DAILY_FALLBACK_TREND` - use MA50 trend when probability is between the band
+- `DAILY_USE_MODEL` - set False to use pure MA50 trend for daily direction
 
 ---
 
@@ -149,8 +155,9 @@ Use `scripts/test_order.py` to place and close a tiny demo order and print recen
 - Walk-forward evaluation (train window + test window)
 - Confidence thresholds for trades
 - ATR-based stop-loss / take-profit
-- Trend filter using MA20
+- Trend filter using MA50
 - Daily forced trade (same settings as live)
+Default walk-forward windows: 1000 train / 1 test.
 
 `train_model.py` uses incremental learning (updates the previous model if new data exists).
 
