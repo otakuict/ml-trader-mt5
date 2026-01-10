@@ -1,0 +1,8 @@
+2026-01-08 17:03:58,475 INFO Training start
+2026-01-08 17:03:58,835 INFO Saved model to D:\work\bot-trade\ml-trader-mt5\models\model_20260108_170358.joblib
+2026-01-08 17:03:58,835 INFO Saved latest model to D:\work\bot-trade\ml-trader-mt5\models\model.joblib
+2026-01-08 17:03:58,835 INFO Rows: 78224
+2026-01-08 17:03:58,836 INFO Train mode: incremental
+2026-01-08 17:03:58,836 INFO Last train time: 2026-01-08T10:00:00
+2026-01-08 17:03:58,836 INFO Test accuracy: 0.4851
+2026-01-08 17:03:58,836 INFO Test precision: 0.5311

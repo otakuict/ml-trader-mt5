@@ -1,29 +1,57 @@
 import json
 import time
-from datetime import datetime
-from pathlib import Path
+from datetime import datetime, timedelta
 from typing import Optional
 
 import joblib
 import MetaTrader5 as mt5
+import numpy as np
 import pandas as pd
 
-SYMBOL = "GOLD"
-TIMEFRAME = mt5.TIMEFRAME_D1
+from data_loader import load_price_data, to_daily
+from settings import (
+    DATA_PATH,
+    META_PATH,
+    MODEL_PATH,
+    STATE_PATH,
+    SYMBOL,
+    START_DATE,
+    LOT_SIZE,
+)
+
+TIMEFRAME = mt5.TIMEFRAME_H4
 BARS = 2000
 SLEEP_SECONDS = 300
 DRY_RUN = False
-LOT_SIZE = 0.01
 MAX_POSITIONS = 1
 MAGIC = 51001
 DEVIATION = 20
 ALLOW_REAL = False
 CLOSE_ON_OPPOSITE = True
 CLOSE_ON_HOLD = True
+ML_TRADING_ENABLED = True
+USE_ATR_SLTP = True
+SL_ATR_MULT = 1.2
+TP_ATR_MULT = 4.0
+CLASS_BUY_THRESHOLD = 0.85
+CLASS_SELL_THRESHOLD = 0.15
+TREND_FILTER = True
+FORCE_DAILY_TRADE = True
+DAILY_TRADE_HOUR = 23
+DAILY_TRADE_MINUTE = 55
+DAILY_TRADE_DIR_THRESHOLD = 0.50
+DAILY_TRADE_IGNORE_TREND = True
+DAILY_TRADE_ONLY = True
+DAILY_CLOSE_EXISTING = True
+DAILY_FALLBACK_TREND = True
+DAILY_CONF_BUY = 0.65
+DAILY_CONF_SELL = 0.35
+DAILY_USE_MODEL = False
+TREND_MA_PERIOD = 50
+TREND_MA_COL = f"ma_{TREND_MA_PERIOD}"
+RESUME_SKIP_DAILY_IF_POSITION_OPEN = True
+RESYNC_FULL_RANGE = False
 
-DATA_PATH = Path(__file__).resolve().parents[1] / "data" / "gold-data.csv"
-MODEL_PATH = Path(__file__).resolve().parents[1] / "models" / "model.joblib"
-META_PATH = Path(__file__).resolve().parents[1] / "models" / "model_meta.json"
 
 
 def download_data() -> bool:
@@ -50,14 +78,46 @@ def download_data() -> bool:
                 f"server={account.server}",
                 f"balance={account.balance}",
             )
-        rates = mt5.copy_rates_from_pos(SYMBOL, TIMEFRAME, 0, BARS)
+        existing = None
+        existing_count = 0
+        if DATA_PATH.exists():
+            existing = load_price_data(DATA_PATH)
+            existing = existing.dropna(subset=["time"]).sort_values("time")
+            if not existing.empty:
+                existing_count = len(existing)
+                if RESYNC_FULL_RANGE:
+                    start_date = START_DATE
+                else:
+                    last_time = existing["time"].iloc[-1].to_pydatetime()
+                    start_date = last_time + timedelta(seconds=1)
+                rates = mt5.copy_rates_range(
+                    SYMBOL, TIMEFRAME, start_date, datetime.now()
+                )
+            else:
+                rates = mt5.copy_rates_from_pos(SYMBOL, TIMEFRAME, 0, BARS)
+        else:
+            rates = mt5.copy_rates_from_pos(SYMBOL, TIMEFRAME, 0, BARS)
+
         if rates is None or len(rates) == 0:
+            if existing is not None:
+                print("No new data returned. Keeping existing file.")
+                return True
             print("No data returned. Check symbol name and history in MT5.")
             return False
         df = pd.DataFrame(rates)
         df["time"] = pd.to_datetime(df["time"], unit="s")
+        if existing is not None and not existing.empty:
+            df = pd.concat([existing, df], ignore_index=True, sort=False)
+            df = df.drop_duplicates(subset=["time"], keep="last")
+            df = df.sort_values("time")
         DATA_PATH.parent.mkdir(parents=True, exist_ok=True)
         df.to_csv(DATA_PATH, index=False)
+        if existing is not None:
+            added = max(0, len(df) - existing_count)
+            if RESYNC_FULL_RANGE:
+                print(f"Saved {len(df)} rows to {DATA_PATH} (resynced +{added})")
+            else:
+                print(f"Saved {len(df)} rows to {DATA_PATH} (appended +{added})")
         return True
     finally:
         mt5.shutdown()
@@ -72,14 +132,68 @@ def latest_bar_time() -> Optional[datetime]:
     return pd.to_datetime(df.iloc[-1]["time"]).to_pydatetime()
 
 
+def load_state() -> dict:
+    if not STATE_PATH.exists():
+        return {}
+    try:
+        return json.loads(STATE_PATH.read_text())
+    except (ValueError, TypeError, json.JSONDecodeError):
+        return {}
+
+
+def save_state(state: dict) -> None:
+    STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
+    STATE_PATH.write_text(json.dumps(state, indent=2))
+
+
+def parse_date(value: Optional[str]):
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(value).date()
+    except ValueError:
+        return None
+
+
+def has_open_position() -> bool:
+    if not mt5.initialize():
+        print("MT5 initialize failed:", mt5.last_error())
+        return False
+    try:
+        positions = mt5.positions_get(symbol=SYMBOL) or []
+        return len(positions) > 0
+    finally:
+        mt5.shutdown()
+
+
 def make_features(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
-    df["return"] = df["close"].pct_change()
+    if "time" in df.columns:
+        dt = pd.to_datetime(df["time"], errors="coerce")
+        dow = dt.dt.dayofweek
+        df["dow_sin"] = np.sin(2 * np.pi * dow / 7)
+        df["dow_cos"] = np.cos(2 * np.pi * dow / 7)
+    df["return_1"] = df["close"].pct_change()
+    df["return_3"] = df["close"].pct_change(3)
+    df["return_6"] = df["close"].pct_change(6)
     df["hl_range"] = (df["high"] - df["low"]) / df["close"]
     df["oc_change"] = (df["close"] - df["open"]) / df["open"]
     df["ma_5"] = df["close"].rolling(5).mean()
     df["ma_10"] = df["close"].rolling(10).mean()
-    df["volatility_10"] = df["return"].rolling(10).std()
+    df["ma_20"] = df["close"].rolling(20).mean()
+    df[TREND_MA_COL] = df["close"].rolling(TREND_MA_PERIOD).mean()
+    df["ema_5"] = df["close"].ewm(span=5, adjust=False).mean()
+    df["ema_10"] = df["close"].ewm(span=10, adjust=False).mean()
+    df["volatility_10"] = df["return_1"].rolling(10).std()
+    df["volatility_20"] = df["return_1"].rolling(20).std()
+    delta = df["close"].diff()
+    gain = delta.clip(lower=0).rolling(14).mean()
+    loss = (-delta.clip(upper=0)).rolling(14).mean()
+    rs = gain / loss.replace(0, pd.NA)
+    df["rsi_14"] = 100 - (100 / (1 + rs))
+    if "volume" in df.columns:
+        df["vol_ma_20"] = df["volume"].rolling(20).mean()
+        df["vol_change"] = df["volume"].pct_change().replace([pd.NA, pd.NaT], 0.0)
     return df
 
 
@@ -98,7 +212,7 @@ def add_atr(df: pd.DataFrame, period: int = 14) -> pd.DataFrame:
     return df
 
 
-def compute_signal() -> Optional[dict]:
+def compute_signal(apply_trend_filter: bool = True) -> Optional[dict]:
     if not DATA_PATH.exists():
         print(f"Missing data file: {DATA_PATH}")
         return None
@@ -106,7 +220,8 @@ def compute_signal() -> Optional[dict]:
         print("Model not found. Run train_model.py first.")
         return None
 
-    df = pd.read_csv(DATA_PATH)
+    df = load_price_data(DATA_PATH)
+    df = to_daily(df)
     df = add_atr(make_features(df))
     df = df.dropna().reset_index(drop=True)
     if df.empty:
@@ -116,29 +231,70 @@ def compute_signal() -> Optional[dict]:
     meta = json.loads(META_PATH.read_text())
     model_name = meta.get("model_path", MODEL_PATH.name)
     print(f"Using model: {model_name}")
+    model_type = meta.get("model_type", "regression")
     feature_cols = meta["feature_cols"]
-    model = joblib.load(MODEL_PATH)
+    bundle = joblib.load(MODEL_PATH)
+    if isinstance(bundle, dict) and "model" in bundle:
+        model = bundle["model"]
+        scaler = bundle.get("scaler")
+    else:
+        model = bundle
+        scaler = None
+
+    for col in feature_cols:
+        if col not in df.columns:
+            df[col] = 0.0
 
     last = df.iloc[-1]
     X = last[feature_cols].to_frame().T
-    pred_delta = float(model.predict(X)[0])
-
-    atr = float(last.get("atr", 0.0))
-    close = float(last["close"])
-    threshold = max(atr * 0.25, close * 0.002)
-
-    if pred_delta > threshold:
-        signal = "BUY"
-    elif pred_delta < -threshold:
-        signal = "SELL"
+    if scaler is not None:
+        X = scaler.transform(X.to_numpy())
+    if model_type == "classification":
+        pred_proba = float(model.predict_proba(X)[0][1])
+        if pred_proba >= CLASS_BUY_THRESHOLD:
+            signal = "BUY"
+        elif pred_proba <= CLASS_SELL_THRESHOLD:
+            signal = "SELL"
+        else:
+            signal = "HOLD"
+        pred_delta = pred_proba
+        threshold = None
+        atr = float(last.get("atr", 0.0))
     else:
-        signal = "HOLD"
+        pred_delta = float(model.predict(X)[0])
+        atr = float(last.get("atr", 0.0))
+        close = float(last["close"])
+        threshold = max(atr * 0.25, close * 0.002)
+        if pred_delta > threshold:
+            signal = "BUY"
+        elif pred_delta < -threshold:
+            signal = "SELL"
+        else:
+            signal = "HOLD"
+
+    trend_blocked = False
+    close = float(last.get("close", float("nan")))
+    ma_trend = float(last.get(TREND_MA_COL, float("nan")))
+    if apply_trend_filter and TREND_FILTER and signal in {"BUY", "SELL"}:
+        if not np.isfinite(ma_trend) or not np.isfinite(close):
+            signal = "HOLD"
+            trend_blocked = True
+        elif signal == "BUY" and close <= ma_trend:
+            signal = "HOLD"
+            trend_blocked = True
+        elif signal == "SELL" and close >= ma_trend:
+            signal = "HOLD"
+            trend_blocked = True
 
     return {
         "signal": signal,
         "pred_delta": pred_delta,
         "atr": atr,
         "threshold": threshold,
+        "model_type": model_type,
+        "trend_blocked": trend_blocked,
+        "close": close,
+        "ma_trend": ma_trend,
     }
 
 
@@ -201,12 +357,33 @@ def close_position(symbol_info, position) -> bool:
     if result.retcode != mt5.TRADE_RETCODE_DONE:
         print(f"Close failed: retcode={result.retcode} comment={result.comment}")
         return False
-    print(f"Closed position {position.ticket} for {SYMBOL}")
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    side = "SELL" if close_type == mt5.ORDER_TYPE_SELL else "BUY"
+    print(
+        f"=== ORDER CLOSED {timestamp} === {side} {position.volume} {SYMBOL} at {price} ticket={position.ticket}"
+    )
     return True
 
 
-def place_order(signal: str) -> bool:
-    if signal not in {"BUY", "SELL"}:
+def compute_sl_tp(order_type: int, price: float, atr: float, symbol_info) -> tuple:
+    if not USE_ATR_SLTP or not np.isfinite(atr) or atr <= 0:
+        return None, None
+    sl_dist = atr * SL_ATR_MULT
+    tp_dist = atr * TP_ATR_MULT
+    if order_type == mt5.ORDER_TYPE_BUY:
+        sl = price - sl_dist
+        tp = price + tp_dist
+    else:
+        sl = price + sl_dist
+        tp = price - tp_dist
+    digits = getattr(symbol_info, "digits", 5)
+    sl = round(sl, digits)
+    tp = round(tp, digits)
+    return sl, tp
+
+
+def place_order(signal: str, atr: float | None = None) -> bool:
+    if signal not in {"BUY", "SELL", "HOLD"}:
         return False
     if not mt5.initialize():
         print("MT5 initialize failed:", mt5.last_error())
@@ -269,6 +446,7 @@ def place_order(signal: str) -> bool:
         volume = normalize_volume(LOT_SIZE, symbol_info)
 
         filling = resolve_filling(symbol_info)
+        sl, tp = compute_sl_tp(order_type, price, float(atr or 0.0), symbol_info)
 
         request = {
             "action": mt5.TRADE_ACTION_DEAL,
@@ -282,6 +460,10 @@ def place_order(signal: str) -> bool:
             "type_time": mt5.ORDER_TIME_GTC,
             "type_filling": filling,
         }
+        if sl is not None:
+            request["sl"] = sl
+        if tp is not None:
+            request["tp"] = tp
 
         result = mt5.order_send(request)
         if result is None:
@@ -291,7 +473,15 @@ def place_order(signal: str) -> bool:
             print(f"Order failed: retcode={result.retcode} comment={result.comment}")
             return False
 
-        print(f"Order placed: {signal} {volume} {SYMBOL} at {price}")
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        if sl is not None and tp is not None:
+            print(
+                f"=== ORDER OPENED {timestamp} === {signal} {volume} {SYMBOL} at {price} sl={sl} tp={tp}"
+            )
+        else:
+            print(
+                f"=== ORDER OPENED {timestamp} === {signal} {volume} {SYMBOL} at {price}"
+            )
         return True
     finally:
         mt5.shutdown()
@@ -299,21 +489,70 @@ def place_order(signal: str) -> bool:
 
 def main() -> int:
     last_seen = None
+    state = load_state()
+    last_daily_trade_date = parse_date(state.get("last_daily_trade_date"))
     print("Running forever. Press Ctrl+C to stop.")
     while True:
         if download_data():
             current = latest_bar_time()
-            if current and current != last_seen:
-                last_seen = current
-                now = datetime.now()
-                print(f"New D1 candle detected at {current} | Local time: {now}")
-                if DRY_RUN:
-                    print("DRY_RUN is on. No orders will be sent.")
+            if not current:
+                time.sleep(SLEEP_SECONDS)
+                continue
+
+            now = datetime.now()
+            if (
+                DAILY_TRADE_ONLY
+                and RESUME_SKIP_DAILY_IF_POSITION_OPEN
+                and last_daily_trade_date is None
+                and has_open_position()
+            ):
+                last_daily_trade_date = now.date()
+                state["last_daily_trade_date"] = last_daily_trade_date.isoformat()
+                save_state(state)
+                print("Resume: open position detected; skipping new daily trade today.")
+            if not DAILY_TRADE_ONLY and current == last_seen:
+                time.sleep(SLEEP_SECONDS)
+                continue
+
+            last_seen = current
+            print(f"New H4 candle detected at {current} | Local time: {now}")
+            if DRY_RUN:
+                print("DRY_RUN is on. No orders will be sent.")
+            else:
+                if not ML_TRADING_ENABLED:
+                    print("ML trading disabled. Set ML_TRADING_ENABLED = True to trade.")
+                    time.sleep(SLEEP_SECONDS)
+                    continue
+                signal_data = compute_signal(apply_trend_filter=not DAILY_TRADE_ONLY)
+                if not signal_data:
+                    time.sleep(SLEEP_SECONDS)
+                    continue
+                if signal_data["model_type"] == "classification":
+                    if DAILY_TRADE_ONLY:
+                        if DAILY_USE_MODEL:
+                            print(
+                                "Signal:",
+                                f"{signal_data['signal']}",
+                                f"prob={signal_data['pred_delta']:.4f}",
+                                f"atr={signal_data['atr']:.4f}",
+                                f"daily_conf={DAILY_CONF_BUY:.2f}/{DAILY_CONF_SELL:.2f}",
+                            )
+                        else:
+                            print(
+                                "Signal:",
+                                f"{signal_data['signal']}",
+                                f"atr={signal_data['atr']:.4f}",
+                                "daily_mode=trend",
+                            )
+                    else:
+                        print(
+                            "Signal:",
+                            f"{signal_data['signal']}",
+                            f"prob={signal_data['pred_delta']:.4f}",
+                            f"atr={signal_data['atr']:.4f}",
+                            f"thresholds={CLASS_BUY_THRESHOLD:.2f}/{CLASS_SELL_THRESHOLD:.2f}",
+                        )
                 else:
-                    signal_data = compute_signal()
-                    if not signal_data:
-                        time.sleep(SLEEP_SECONDS)
-                        continue
                     print(
                         "Signal:",
                         f"{signal_data['signal']}",
@@ -321,12 +560,91 @@ def main() -> int:
                         f"atr={signal_data['atr']:.4f}",
                         f"threshold={signal_data['threshold']:.4f}",
                     )
+                if DAILY_TRADE_ONLY:
+                    if (
+                        last_daily_trade_date != now.date()
+                        and (
+                            now.hour > DAILY_TRADE_HOUR
+                            or (
+                                now.hour == DAILY_TRADE_HOUR
+                                and now.minute >= DAILY_TRADE_MINUTE
+                            )
+                        )
+                    ):
+                        if signal_data["model_type"] == "classification":
+                            if not DAILY_USE_MODEL:
+                                if not np.isfinite(signal_data["ma_trend"]):
+                                    print(
+                                        f"Daily trade skipped: MA{TREND_MA_PERIOD} not available."
+                                    )
+                                    time.sleep(SLEEP_SECONDS)
+                                    continue
+                                forced_signal = (
+                                    "BUY"
+                                    if signal_data["close"] >= signal_data["ma_trend"]
+                                    else "SELL"
+                                )
+                            elif signal_data["pred_delta"] >= DAILY_CONF_BUY:
+                                forced_signal = "BUY"
+                            elif signal_data["pred_delta"] <= DAILY_CONF_SELL:
+                                forced_signal = "SELL"
+                            elif DAILY_FALLBACK_TREND:
+                                forced_signal = (
+                                    "BUY"
+                                    if signal_data["close"] >= signal_data["ma_trend"]
+                                    else "SELL"
+                                )
+                            else:
+                                forced_signal = (
+                                    "BUY"
+                                    if signal_data["pred_delta"] >= DAILY_TRADE_DIR_THRESHOLD
+                                    else "SELL"
+                                )
+                        else:
+                            forced_signal = (
+                                "BUY" if signal_data["pred_delta"] >= 0 else "SELL"
+                            )
+
+                        if not DAILY_TRADE_IGNORE_TREND:
+                            close = signal_data.get("close", float("nan"))
+                            ma_trend = signal_data.get("ma_trend", float("nan"))
+                            if (
+                                not np.isfinite(close)
+                                or not np.isfinite(ma_trend)
+                                or (forced_signal == "BUY" and close <= ma_trend)
+                                or (forced_signal == "SELL" and close >= ma_trend)
+                            ):
+                                print("Daily trade blocked by trend filter.")
+                                time.sleep(SLEEP_SECONDS)
+                                continue
+
+                        if DAILY_CLOSE_EXISTING:
+                            place_order("HOLD", signal_data["atr"])
+
+                        print(f"Daily trade at {now} -> {forced_signal}")
+                        trade_made = place_order(forced_signal, signal_data["atr"])
+                        if trade_made:
+                            last_daily_trade_date = now.date()
+                            state["last_daily_trade_date"] = last_daily_trade_date.isoformat()
+                            save_state(state)
+                else:
+                    trade_made = False
                     if signal_data["signal"] == "HOLD":
-                        print("No trade: signal is HOLD.")
+                        if signal_data.get("trend_blocked"):
+                            print("No trade: blocked by trend filter.")
+                        else:
+                            print("No trade: signal is HOLD.")
                         if CLOSE_ON_HOLD:
-                            place_order("HOLD")
+                            place_order("HOLD", signal_data["atr"])
                     else:
-                        place_order(signal_data["signal"])
+                        trade_made = place_order(
+                            signal_data["signal"], signal_data["atr"]
+                        )
+
+                    if trade_made:
+                        last_daily_trade_date = now.date()
+                        state["last_daily_trade_date"] = last_daily_trade_date.isoformat()
+                        save_state(state)
         time.sleep(SLEEP_SECONDS)
 
 

@@ -1,9 +1,11 @@
+import logging
+from datetime import datetime
+
 import backtrader as bt
-from pathlib import Path
 
 from data_loader import load_price_data
+from settings import DATA_PATH, LOG_DIR
 
-DATA_PATH = Path(__file__).resolve().parents[1] / "data" / "gold-data.csv"
 
 
 class SmaCross(bt.Strategy):
@@ -22,13 +24,23 @@ class SmaCross(bt.Strategy):
 
 
 def main() -> int:
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    LOG_DIR.mkdir(parents=True, exist_ok=True)
+    log_path = LOG_DIR / f"backtest_{timestamp}.log"
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)s %(message)s",
+        handlers=[logging.FileHandler(log_path, encoding="utf-8"), logging.StreamHandler()],
+    )
+    logging.info("Backtest start")
+
     if not DATA_PATH.exists():
-        print(f"Missing data file: {DATA_PATH}")
+        logging.error("Missing data file: %s", DATA_PATH)
         return 1
 
     df = load_price_data(DATA_PATH)
     if "time" not in df.columns:
-        print("Missing time/date column in CSV.")
+        logging.error("Missing time/date column in CSV.")
         return 1
 
     df = df.dropna(subset=["time", "open", "high", "low", "close"]).copy()
@@ -46,9 +58,10 @@ def main() -> int:
     cerebro.run()
     end_value = cerebro.broker.getvalue()
 
-    print(f"Start value: {start_value:.2f}")
-    print(f"End value:   {end_value:.2f}")
-    print(f"PnL:         {end_value - start_value:.2f}")
+    pnl = end_value - start_value
+    logging.info("Start value: %.2f", start_value)
+    logging.info("End value:   %.2f", end_value)
+    logging.info("PnL:         %.2f", pnl)
     return 0
 
 

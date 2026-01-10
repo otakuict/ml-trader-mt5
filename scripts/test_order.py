@@ -3,8 +3,7 @@ from datetime import datetime, timedelta
 
 import MetaTrader5 as mt5
 
-SYMBOL = "GOLD"
-LOT_SIZE = 0.01
+from settings import LOT_SIZE, SYMBOL
 DEVIATION = 20
 MAGIC = 51002
 

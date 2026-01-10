@@ -1,0 +1,7 @@
+2026-01-08 15:15:23,828 INFO ML backtest start
+2026-01-08 15:15:24,584 INFO Using model: model_20260108_151514.joblib
+2026-01-08 15:15:24,584 INFO Model type: classification
+2026-01-08 15:15:24,584 INFO Thresholds: BUY>=0.65 SELL<=0.35
+2026-01-08 15:15:29,509 INFO Start value: 10000.00
+2026-01-08 15:15:29,509 INFO End value:   10000.00
+2026-01-08 15:15:29,509 INFO PnL:         0.00

@@ -1,13 +1,7 @@
-# ml-trader — XM MT5 Demo ML Bot (GOLD, D1)
+# ml-trader - XM MT5 Demo ML Bot (GOLD)
 
-A simple **demo** trading project for **XM MetaTrader 5 (MT5)** that trades **GOLD** on **Daily (D1)** using a **machine-learning regression** signal.
-
-It includes:
-- MT5 → CSV data download
-- Backtesting with Backtrader
-- ML regression training + prediction
-- A “run forever” bot loop (terminal stays open)
-- Windows Startup launch (no Task Scheduler)
+A simple **demo** trading project for **XM MetaTrader 5 (MT5)** using a **machine-learning signal**.
+Default timeframe: **H4** (model trains on daily bars derived from H4).
 
 > Use **demo** for learning/testing. Real-money trading is risky and often age-restricted.
 
@@ -18,15 +12,21 @@ It includes:
 ml-trader/
 - requirements.txt
 - run_bot.bat
+- retrain_all.bat
+- readme_daytrade.md
 - data/
 - logs/
 - models/
 - scripts/
+  - data_loader.py
   - download_mt5_data.py
   - backtest_bt.py
+  - backtest_ml.py
   - train_model.py
+  - auto_retrain.py
   - predict_signal.py
   - run_forever.py
+  - test_order.py
 
 ---
 
@@ -42,11 +42,12 @@ ml-trader/
 ## Setup (MT5)
 
 1. Open MT5 and login to an **XM demo** account
-2. Market Watch (Ctrl+M) → right click → Show All
+2. Market Watch (Ctrl+M) + right click + Show All
 3. Confirm you see **GOLD**
-4. Open a **GOLD** chart → set timeframe to **D1**
+4. Open a **GOLD** chart and set timeframe to **H4**
 5. Scroll back to load more history (important)
-6. Optional: If you already have a CSV (example: data/GOLD_Daily_200106040000_202601070000.csv), place it in data/ and skip manual scrolling
+
+If you already have a CSV, place it in `data/` and use it directly (see Data files).
 
 ---
 
@@ -59,62 +60,119 @@ ml-trader/
 2) Install packages:
 - pip install -r requirements.txt
 
-requirements.txt should include:
-- MetaTrader5
-- pandas
-- backtrader
-- scikit-learn
-- joblib
+---
+
+## Data files
+
+Default data file (used by all scripts):
+- `data/gold-data-h4.csv`
+
+`download_mt5_data.py` uses a date range (2000 -> now) and **appends** when the file
+already exists (it keeps the old history and adds new bars).
+Set `RESYNC_FULL_RANGE = True` in `scripts/download_mt5_data.py` to re-sync the full
+history and backfill gaps, then set it back to False.
 
 ---
 
 ## Run order (first time)
 
-1) Download GOLD D1 candles to CSV:
+1) Download GOLD H4 candles to CSV:
 - python scripts/download_mt5_data.py
 
-2) Backtest starter strategy:
+2) Backtest starter strategy (SMA cross):
 - python scripts/backtest_bt.py
 
-3) Train ML regression model:
+2b) Backtest ML strategy (uses saved model):
+- python scripts/backtest_ml.py
+
+3) Train ML classification model (incremental updates):
 - python scripts/train_model.py
 
 4) Check prediction + signal:
 - python scripts/predict_signal.py
 
-5) Run the bot forever (keeps terminal open):
+5) Run the bot loop:
 - python scripts/run_forever.py
 
 ---
 
-## Auto-run on Windows startup (one terminal window)
+## Retrain flow
 
-1) Create run_bot.bat in the project root:
+Manual retrain (refresh data + train + backtest + predict):
+- .\retrain_all.bat
 
-@echo off
-cd /d "%~dp0"
-call .venv\Scripts\activate
-python scripts\run_forever.py
-pause
-
-2) Add it to Startup:
-- Win + R → shell:startup
-- Put a shortcut to run_bot.bat in that folder
-
-Now the bot starts when you log in and keeps a terminal window open.
+Auto-retrain (only replace if performance improves):
+- python scripts/auto_retrain.py
 
 ---
 
-## Notes
+## Logs and models
 
-- If MT5 returns no data, open GOLD D1 and scroll left to load history.
-- If your XM symbol isn’t exactly GOLD, change SYMBOL="GOLD" inside scripts.
-- For stability, set your PC Sleep/Hibernate to “Never” (or long enough).
+- Training logs: `logs/train_YYYYMMDD_HHMMSS.log`
+- Auto-retrain logs: `logs/auto_retrain_YYYYMMDD_HHMMSS.log`
+- Timestamped models: `models/model_YYYYMMDD_HHMMSS.joblib`
+- Latest model copy: `models/model.joblib`
+- Model metadata: `models/model_meta.json`
+
+`run_forever.py` prints which model it is using at runtime.
 
 ---
 
-## Suggested safety defaults (demo)
-- Small lot size (e.g., 0.01)
-- One position at a time
-- Trade at most once per new D1 candle
-- Use an ATR-based threshold so it doesn’t trade tiny/noisy predictions
+## Run-forever behavior
+
+`run_forever.py` checks every 5 minutes and:
+- Builds a daily signal from H4 data
+- Places one trade per day at **23:55 local time** (configurable)
+- Uses ATR-based SL/TP if enabled
+
+Shared settings live in `scripts/settings.py` (SYMBOL, DATA_PATH, START_DATE, LOT_SIZE).
+Safety switches (top of `scripts/run_forever.py`):
+- `DRY_RUN` - no orders if True
+- `ALLOW_REAL` - must be True to trade a non-demo account
+- `LOT_SIZE` - small default size for demo testing (set in `scripts/settings.py`)
+- `ML_TRADING_ENABLED` - set False to pause ML trading
+- `CLASS_BUY_THRESHOLD` / `CLASS_SELL_THRESHOLD` - confidence thresholds (default 0.85/0.15)
+- `USE_ATR_SLTP`, `SL_ATR_MULT`, `TP_ATR_MULT` - ATR-based stop/take-profit (default SLx=1.2 TPx=4.0)
+- `TREND_FILTER` - only buy above MA50, sell below MA50
+- `TREND_MA_PERIOD` - moving average length used by the trend filter (default 50)
+- `DAILY_TRADE_ONLY` - trade once per day at the configured time
+- `DAILY_TRADE_HOUR` / `DAILY_TRADE_MINUTE` - local time for daily entry (default 23:55)
+- `DAILY_TRADE_DIR_THRESHOLD` - probability cutoff for daily direction (>= BUY else SELL)
+- `DAILY_CLOSE_EXISTING` - close existing position before the daily trade
+- `DAILY_CONF_BUY` / `DAILY_CONF_SELL` - confidence band for model-driven direction (default 0.65/0.35)
+- `DAILY_FALLBACK_TREND` - use MA50 trend when probability is between the band
+- `DAILY_USE_MODEL` - set False to use pure MA50 trend for daily direction
+- `FORCE_DAILY_TRADE` - force at least one trade per day
+- `DAILY_TRADE_HOUR` / `DAILY_TRADE_MINUTE` - time for the daily forced trade
+- `DAILY_TRADE_DIR_THRESHOLD` - probability threshold to pick BUY vs SELL
+- `DAILY_TRADE_IGNORE_TREND` - ignore MA50 filter for forced daily trade
+- `RESUME_SKIP_DAILY_IF_POSITION_OPEN` - on restart, skip today’s daily trade if a position is already open
+- `RESYNC_FULL_RANGE` - re-sync full history from START_DATE (set True temporarily)
+
+---
+
+## One-time test order
+
+Use `scripts/test_order.py` to place and close a tiny demo order and print recent history:
+- python scripts/test_order.py
+
+---
+
+## ML backtest notes
+
+`backtest_ml.py` supports:
+- Walk-forward evaluation (train window + test window)
+- Confidence thresholds for trades
+- ATR-based stop-loss / take-profit
+- Trend filter using MA50
+- Daily forced trade (same settings as live)
+Default walk-forward windows: 1000 train / 1 test.
+Set `BACKTEST_DAYS` in `scripts/backtest_ml.py` to backtest only the last N days.
+
+`train_model.py` uses incremental learning (updates the previous model if new data exists).
+
+---
+
+## Day trade (M30)
+
+See `readme_daytrade.md` for M30 setup.
