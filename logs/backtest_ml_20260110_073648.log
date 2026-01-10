@@ -1,0 +1,16 @@
+2026-01-10 07:36:48,817 INFO ML backtest start
+2026-01-10 07:36:49,606 INFO Using model: model_20260109_182632.joblib
+2026-01-10 07:36:49,606 INFO Model type: classification
+2026-01-10 07:36:49,606 INFO Walk-forward: True
+2026-01-10 07:36:49,606 INFO Thresholds: BUY>=0.85 SELL<=0.15
+2026-01-10 07:36:49,606 INFO Daily trade only: True | Dir>=0.50
+2026-01-10 07:36:49,606 INFO Daily conf: BUY>=0.65 SELL<=0.35 | Fallback trend: True
+2026-01-10 07:36:49,607 INFO Daily use model: False
+2026-01-10 07:36:49,607 INFO Trend filter: True
+2026-01-10 07:36:49,607 INFO ATR SL/TP: True | SLx=1.20 TPx=4.00
+2026-01-10 07:36:49,652 INFO Trades: 0 | Forced trades: 0
+2026-01-10 07:36:49,653 INFO Start value: 10000.00
+2026-01-10 07:36:49,653 INFO End value:   10000.00
+2026-01-10 07:36:49,653 INFO PnL:         0.00
+2026-01-10 07:36:49,653 INFO Signals: BUY=0 SELL=0 TOTAL=0
+2026-01-10 07:36:49,654 INFO Signals per day: 0.00

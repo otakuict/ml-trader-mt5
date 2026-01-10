@@ -1,7 +1,6 @@
 import json
 import time
-from datetime import datetime
-from pathlib import Path
+from datetime import datetime, timedelta
 from typing import Optional
 
 import joblib
@@ -10,13 +9,20 @@ import numpy as np
 import pandas as pd
 
 from data_loader import load_price_data, to_daily
+from settings import (
+    DATA_PATH,
+    META_PATH,
+    MODEL_PATH,
+    STATE_PATH,
+    SYMBOL,
+    START_DATE,
+    LOT_SIZE,
+)
 
-SYMBOL = "GOLD"
 TIMEFRAME = mt5.TIMEFRAME_H4
 BARS = 2000
 SLEEP_SECONDS = 300
 DRY_RUN = False
-LOT_SIZE = 0.01
 MAX_POSITIONS = 1
 MAGIC = 51001
 DEVIATION = 20
@@ -43,10 +49,9 @@ DAILY_CONF_SELL = 0.35
 DAILY_USE_MODEL = False
 TREND_MA_PERIOD = 50
 TREND_MA_COL = f"ma_{TREND_MA_PERIOD}"
+RESUME_SKIP_DAILY_IF_POSITION_OPEN = True
+RESYNC_FULL_RANGE = False
 
-DATA_PATH = Path(__file__).resolve().parents[1] / "data" / "gold-data-h4.csv"
-MODEL_PATH = Path(__file__).resolve().parents[1] / "models" / "model.joblib"
-META_PATH = Path(__file__).resolve().parents[1] / "models" / "model_meta.json"
 
 
 def download_data() -> bool:
@@ -73,14 +78,46 @@ def download_data() -> bool:
                 f"server={account.server}",
                 f"balance={account.balance}",
             )
-        rates = mt5.copy_rates_from_pos(SYMBOL, TIMEFRAME, 0, BARS)
+        existing = None
+        existing_count = 0
+        if DATA_PATH.exists():
+            existing = load_price_data(DATA_PATH)
+            existing = existing.dropna(subset=["time"]).sort_values("time")
+            if not existing.empty:
+                existing_count = len(existing)
+                if RESYNC_FULL_RANGE:
+                    start_date = START_DATE
+                else:
+                    last_time = existing["time"].iloc[-1].to_pydatetime()
+                    start_date = last_time + timedelta(seconds=1)
+                rates = mt5.copy_rates_range(
+                    SYMBOL, TIMEFRAME, start_date, datetime.now()
+                )
+            else:
+                rates = mt5.copy_rates_from_pos(SYMBOL, TIMEFRAME, 0, BARS)
+        else:
+            rates = mt5.copy_rates_from_pos(SYMBOL, TIMEFRAME, 0, BARS)
+
         if rates is None or len(rates) == 0:
+            if existing is not None:
+                print("No new data returned. Keeping existing file.")
+                return True
             print("No data returned. Check symbol name and history in MT5.")
             return False
         df = pd.DataFrame(rates)
         df["time"] = pd.to_datetime(df["time"], unit="s")
+        if existing is not None and not existing.empty:
+            df = pd.concat([existing, df], ignore_index=True, sort=False)
+            df = df.drop_duplicates(subset=["time"], keep="last")
+            df = df.sort_values("time")
         DATA_PATH.parent.mkdir(parents=True, exist_ok=True)
         df.to_csv(DATA_PATH, index=False)
+        if existing is not None:
+            added = max(0, len(df) - existing_count)
+            if RESYNC_FULL_RANGE:
+                print(f"Saved {len(df)} rows to {DATA_PATH} (resynced +{added})")
+            else:
+                print(f"Saved {len(df)} rows to {DATA_PATH} (appended +{added})")
         return True
     finally:
         mt5.shutdown()
@@ -93,6 +130,40 @@ def latest_bar_time() -> Optional[datetime]:
     if df.empty:
         return None
     return pd.to_datetime(df.iloc[-1]["time"]).to_pydatetime()
+
+
+def load_state() -> dict:
+    if not STATE_PATH.exists():
+        return {}
+    try:
+        return json.loads(STATE_PATH.read_text())
+    except (ValueError, TypeError, json.JSONDecodeError):
+        return {}
+
+
+def save_state(state: dict) -> None:
+    STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
+    STATE_PATH.write_text(json.dumps(state, indent=2))
+
+
+def parse_date(value: Optional[str]):
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(value).date()
+    except ValueError:
+        return None
+
+
+def has_open_position() -> bool:
+    if not mt5.initialize():
+        print("MT5 initialize failed:", mt5.last_error())
+        return False
+    try:
+        positions = mt5.positions_get(symbol=SYMBOL) or []
+        return len(positions) > 0
+    finally:
+        mt5.shutdown()
 
 
 def make_features(df: pd.DataFrame) -> pd.DataFrame:
@@ -286,7 +357,11 @@ def close_position(symbol_info, position) -> bool:
     if result.retcode != mt5.TRADE_RETCODE_DONE:
         print(f"Close failed: retcode={result.retcode} comment={result.comment}")
         return False
-    print(f"Closed position {position.ticket} for {SYMBOL}")
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    side = "SELL" if close_type == mt5.ORDER_TYPE_SELL else "BUY"
+    print(
+        f"=== ORDER CLOSED {timestamp} === {side} {position.volume} {SYMBOL} at {price} ticket={position.ticket}"
+    )
     return True
 
 
@@ -398,10 +473,15 @@ def place_order(signal: str, atr: float | None = None) -> bool:
             print(f"Order failed: retcode={result.retcode} comment={result.comment}")
             return False
 
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         if sl is not None and tp is not None:
-            print(f"Order placed: {signal} {volume} {SYMBOL} at {price} sl={sl} tp={tp}")
+            print(
+                f"=== ORDER OPENED {timestamp} === {signal} {volume} {SYMBOL} at {price} sl={sl} tp={tp}"
+            )
         else:
-            print(f"Order placed: {signal} {volume} {SYMBOL} at {price}")
+            print(
+                f"=== ORDER OPENED {timestamp} === {signal} {volume} {SYMBOL} at {price}"
+            )
         return True
     finally:
         mt5.shutdown()
@@ -409,7 +489,8 @@ def place_order(signal: str, atr: float | None = None) -> bool:
 
 def main() -> int:
     last_seen = None
-    last_daily_trade_date = None
+    state = load_state()
+    last_daily_trade_date = parse_date(state.get("last_daily_trade_date"))
     print("Running forever. Press Ctrl+C to stop.")
     while True:
         if download_data():
@@ -419,6 +500,16 @@ def main() -> int:
                 continue
 
             now = datetime.now()
+            if (
+                DAILY_TRADE_ONLY
+                and RESUME_SKIP_DAILY_IF_POSITION_OPEN
+                and last_daily_trade_date is None
+                and has_open_position()
+            ):
+                last_daily_trade_date = now.date()
+                state["last_daily_trade_date"] = last_daily_trade_date.isoformat()
+                save_state(state)
+                print("Resume: open position detected; skipping new daily trade today.")
             if not DAILY_TRADE_ONLY and current == last_seen:
                 time.sleep(SLEEP_SECONDS)
                 continue
@@ -534,6 +625,8 @@ def main() -> int:
                         trade_made = place_order(forced_signal, signal_data["atr"])
                         if trade_made:
                             last_daily_trade_date = now.date()
+                            state["last_daily_trade_date"] = last_daily_trade_date.isoformat()
+                            save_state(state)
                 else:
                     trade_made = False
                     if signal_data["signal"] == "HOLD":
@@ -550,6 +643,8 @@ def main() -> int:
 
                     if trade_made:
                         last_daily_trade_date = now.date()
+                        state["last_daily_trade_date"] = last_daily_trade_date.isoformat()
+                        save_state(state)
         time.sleep(SLEEP_SECONDS)
 
 

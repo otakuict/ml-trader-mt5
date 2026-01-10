@@ -67,8 +67,10 @@ If you already have a CSV, place it in `data/` and use it directly (see Data fil
 Default data file (used by all scripts):
 - `data/gold-data-h4.csv`
 
-`download_mt5_data.py` uses a date range (2000 -> now) and **overwrites** the file.
-If you want to keep a long historical CSV, do not overwrite it, or change the output path.
+`download_mt5_data.py` uses a date range (2000 -> now) and **appends** when the file
+already exists (it keeps the old history and adds new bars).
+Set `RESYNC_FULL_RANGE = True` in `scripts/download_mt5_data.py` to re-sync the full
+history and backfill gaps, then set it back to False.
 
 ---
 
@@ -123,10 +125,11 @@ Auto-retrain (only replace if performance improves):
 - Places one trade per day at **23:55 local time** (configurable)
 - Uses ATR-based SL/TP if enabled
 
+Shared settings live in `scripts/settings.py` (SYMBOL, DATA_PATH, START_DATE, LOT_SIZE).
 Safety switches (top of `scripts/run_forever.py`):
 - `DRY_RUN` - no orders if True
 - `ALLOW_REAL` - must be True to trade a non-demo account
-- `LOT_SIZE` - small default size for demo testing
+- `LOT_SIZE` - small default size for demo testing (set in `scripts/settings.py`)
 - `ML_TRADING_ENABLED` - set False to pause ML trading
 - `CLASS_BUY_THRESHOLD` / `CLASS_SELL_THRESHOLD` - confidence thresholds (default 0.85/0.15)
 - `USE_ATR_SLTP`, `SL_ATR_MULT`, `TP_ATR_MULT` - ATR-based stop/take-profit (default SLx=1.2 TPx=4.0)
@@ -143,6 +146,8 @@ Safety switches (top of `scripts/run_forever.py`):
 - `DAILY_TRADE_HOUR` / `DAILY_TRADE_MINUTE` - time for the daily forced trade
 - `DAILY_TRADE_DIR_THRESHOLD` - probability threshold to pick BUY vs SELL
 - `DAILY_TRADE_IGNORE_TREND` - ignore MA50 filter for forced daily trade
+- `RESUME_SKIP_DAILY_IF_POSITION_OPEN` - on restart, skip today’s daily trade if a position is already open
+- `RESYNC_FULL_RANGE` - re-sync full history from START_DATE (set True temporarily)
 
 ---
 
@@ -162,6 +167,7 @@ Use `scripts/test_order.py` to place and close a tiny demo order and print recen
 - Trend filter using MA50
 - Daily forced trade (same settings as live)
 Default walk-forward windows: 1000 train / 1 test.
+Set `BACKTEST_DAYS` in `scripts/backtest_ml.py` to backtest only the last N days.
 
 `train_model.py` uses incremental learning (updates the previous model if new data exists).
 

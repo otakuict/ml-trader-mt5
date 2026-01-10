@@ -1,7 +1,6 @@
 import json
 import logging
 from datetime import datetime
-from pathlib import Path
 
 import backtrader as bt
 import joblib
@@ -11,18 +10,15 @@ from sklearn.base import clone
 from sklearn.preprocessing import StandardScaler
 
 from data_loader import load_price_data, to_daily
+from settings import DATA_PATH, LOG_DIR, META_PATH, MODEL_PATH, LOT_SIZE
 
-ROOT_DIR = Path(__file__).resolve().parents[1]
-DATA_PATH = ROOT_DIR / "data" / "gold-data-h4.csv"
-MODEL_PATH = ROOT_DIR / "models" / "model.joblib"
-META_PATH = ROOT_DIR / "models" / "model_meta.json"
-LOG_DIR = ROOT_DIR / "logs"
 
 BUY_THRESHOLD = 0.85
 SELL_THRESHOLD = 0.15
 USE_WALK_FORWARD = True
 TRAIN_WINDOW = 1000
 TEST_WINDOW = 1
+BACKTEST_DAYS = 90
 USE_ATR_SLTP = True
 SL_ATR_MULT = 1.2
 TP_ATR_MULT = 4.0
@@ -31,7 +27,7 @@ CLOSE_ON_HOLD = True
 CLOSE_ON_OPPOSITE = True
 START_CASH = 10000.0
 COMMISSION = 0.0005
-TRADE_SIZE = 1
+TRADE_SIZE = LOT_SIZE
 FORCE_DAILY_TRADE = False
 DAILY_TRADE_HOUR = 23
 DAILY_TRADE_MINUTE = 55
@@ -457,6 +453,20 @@ def main() -> int:
         df["ma_trend"] = features[TREND_MA_COL]
     else:
         df["ma_trend"] = np.nan
+
+    if BACKTEST_DAYS and BACKTEST_DAYS > 0 and not df.empty:
+        end_date = df.index.max()
+        start_date = end_date - pd.Timedelta(days=BACKTEST_DAYS)
+        df = df.loc[df.index >= start_date].copy()
+        logging.info(
+            "Backtest window: last %s days (%s -> %s)",
+            BACKTEST_DAYS,
+            start_date.date(),
+            end_date.date(),
+        )
+        if df.empty:
+            logging.error("Backtest window produced no rows.")
+            return 1
 
     signal_counts = df["signal"].value_counts()
     buy_signals = int(signal_counts.get(1, 0))

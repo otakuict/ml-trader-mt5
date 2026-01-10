@@ -1,7 +1,6 @@
 import json
 import logging
 from datetime import datetime
-from pathlib import Path
 
 import joblib
 import numpy as np
@@ -12,16 +11,11 @@ from sklearn.preprocessing import StandardScaler
 from sklearn.utils.class_weight import compute_class_weight
 
 from data_loader import load_price_data, to_daily
+from settings import DATA_PATH, LOG_DIR, META_PATH, MODEL_DIR, MODEL_PATH
 
 REFRESH_FROM_MT5 = True
 HORIZON_DAYS = 1
 
-ROOT_DIR = Path(__file__).resolve().parents[1]
-DATA_PATH = ROOT_DIR / "data" / "gold-data-h4.csv"
-MODEL_DIR = ROOT_DIR / "models"
-MODEL_PATH = MODEL_DIR / "model.joblib"
-META_PATH = MODEL_DIR / "model_meta.json"
-LOG_DIR = ROOT_DIR / "logs"
 
 MIN_IMPROVEMENT = 0.01
 

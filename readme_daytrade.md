@@ -121,10 +121,11 @@ Auto-retrain (only replace if performance improves):
 - Closes on HOLD if `CLOSE_ON_HOLD = True`
 - Closes opposite positions if `CLOSE_ON_OPPOSITE = True`
 
+Shared settings live in `scripts/settings.py` (SYMBOL, DATA_PATH, START_DATE, LOT_SIZE).
 Safety switches (top of `scripts/run_forever.py`):
 - `DRY_RUN` - no orders if True
 - `ALLOW_REAL` - must be True to trade a non-demo account
-- `LOT_SIZE` - small default size for demo testing
+- `LOT_SIZE` - small default size for demo testing (set in `scripts/settings.py`)
 - `ML_TRADING_ENABLED` - set False to pause ML trading
 - `CLASS_BUY_THRESHOLD` / `CLASS_SELL_THRESHOLD` - confidence thresholds (default 0.85/0.15)
 - `USE_ATR_SLTP`, `SL_ATR_MULT`, `TP_ATR_MULT` - ATR-based stop/take-profit (default SLx=1.2 TPx=4.0)
@@ -139,6 +140,8 @@ Safety switches (top of `scripts/run_forever.py`):
 - `DAILY_CONF_BUY` / `DAILY_CONF_SELL` - confidence band for model-driven direction (default 0.65/0.35)
 - `DAILY_FALLBACK_TREND` - use MA50 trend when probability is between the band
 - `DAILY_USE_MODEL` - set False to use pure MA50 trend for daily direction
+- `RESUME_SKIP_DAILY_IF_POSITION_OPEN` - on restart, skip today’s daily trade if a position is already open
+- `RESYNC_FULL_RANGE` - re-sync full history from START_DATE (set True temporarily)
 
 ---
 
@@ -158,6 +161,7 @@ Use `scripts/test_order.py` to place and close a tiny demo order and print recen
 - Trend filter using MA50
 - Daily forced trade (same settings as live)
 Default walk-forward windows: 1000 train / 1 test.
+Set `BACKTEST_DAYS` in `scripts/backtest_ml.py` to backtest only the last N days.
 
 `train_model.py` uses incremental learning (updates the previous model if new data exists).
 

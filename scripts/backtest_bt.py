@@ -1,14 +1,11 @@
 import logging
 from datetime import datetime
-from pathlib import Path
 
 import backtrader as bt
 
 from data_loader import load_price_data
+from settings import DATA_PATH, LOG_DIR
 
-ROOT_DIR = Path(__file__).resolve().parents[1]
-DATA_PATH = ROOT_DIR / "data" / "gold-data-h4.csv"
-LOG_DIR = ROOT_DIR / "logs"
 
 
 class SmaCross(bt.Strategy):

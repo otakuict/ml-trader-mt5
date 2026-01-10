@@ -1,15 +1,12 @@
 import json
-from pathlib import Path
 
 import joblib
 import numpy as np
 import pandas as pd
 
 from data_loader import load_price_data, to_daily
+from settings import DATA_PATH, META_PATH, MODEL_PATH
 
-DATA_PATH = Path(__file__).resolve().parents[1] / "data" / "gold-data-h4.csv"
-MODEL_PATH = Path(__file__).resolve().parents[1] / "models" / "model.joblib"
-META_PATH = Path(__file__).resolve().parents[1] / "models" / "model_meta.json"
 
 DAILY_TRADE_ONLY = True
 DAILY_TRADE_DIR_THRESHOLD = 0.50
